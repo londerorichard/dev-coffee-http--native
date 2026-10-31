@@ -1,0 +1,22 @@
+{
+  "name": "dev-coffee-http-native",
+  "version": "1.0.0",
+  "description": "Learning project using Node.js native HTTP module",
+  "main": "server.js",
+  "scripts": {
+  "start": "node server.js",
+  "dev": "node --watch server.js"
+  },
+  "repository": {
+  "type": "git",
+  "url": "git+https://github.com/londerorichard/dev-coffee-http--native.git"
+  },
+  "keywords": ["nodejs", "http", "backend"],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+  "url": "https://github.com/londerorichard/dev-coffee-http--native/issues"
+  },
+  "homepage": "https://github.com/londerorichard/dev-coffee-http--native#readme"
+}
