@@ -1,3 +1,5 @@
+const http = require("node:http");
+
 const PORT = 3000;
 
 // ==========================================================
@@ -16,14 +18,14 @@ Object.freeze(OrderStatus);
 
 class Order {
 
-    constructor(id, client, item, status) {
+    constructor(id, client, item, status = OrderStatus.PENDENTE) {
         this.id = id;
         this.client = client;
         this.item = item;
         this.status = status;
     }
 
-    getInformation() {
+    getAllOrders() {
         return {
             id: this.id,
             client: this.client,
@@ -33,8 +35,8 @@ class Order {
     }
 }
 
-function getAllInformations() {
-    return orders.map(order => order.getInformation());
+function getAllOrders() {
+    return orders.map(order => order.getAllOrders());
 }
 
 
@@ -44,6 +46,9 @@ const orders = [
     new Order(2, "Juniper", "Espresso", OrderStatus.PRONTO),
     new Order(3, "Axel", "Latte", OrderStatus.CANCELADO)
 ];
+
+// Next available ID
+let nextOrderId = Math.max(...orders.map(order => order.id), 0) + 1;
 
 
 // ==========================================================
@@ -81,72 +86,6 @@ function validateOrder(data) {
         };
     }
 
-    if (!validateStatus(data.status)) {
-        return {
-            valid: false,
-            message: "Invalid order status"
-        };
-    }
-
-    return { valid: true };
-}
-
-
-// PATCH - Validate an existing order update
-function validateOrderUpdate(data) {
-
-    if (!data || typeof data !== "object" || Array.isArray(data)) {
-        return {
-            valid: false,
-            message: "Invalid update data"
-        };
-    }
-
-    const allowedFields = ["client", "item", "status"];
-
-    const fields = Object.keys(data);
-
-    if (fields.length === 0) {
-        return {
-            valid: false,
-            message: "At least one field is required"
-        };
-    }
-
-    const invalidFields = fields.filter(
-        field => !allowedFields.includes(field)
-    );
-
-    if (invalidFields.length > 0) {
-        return {
-            valid: false,
-            message: `Invalid fields: ${invalidFields.join(", ")}`
-        };
-    }
-
-    if ("client" in data &&
-        (typeof data.client !== "string" || data.client.trim() === "")) {
-        return {
-            valid: false,
-            message: "Invalid client"
-        };
-    }
-
-    if ("item" in data &&
-        (typeof data.item !== "string" || data.item.trim() === "")) {
-        return {
-            valid: false,
-            message: "Invalid item"
-        };
-    }
-
-    if ("status" in data && !validateStatus(data.status)) {
-        return {
-            valid: false,
-            message: "Invalid order status"
-        };
-    }
-
     return { valid: true };
 }
 
@@ -167,45 +106,235 @@ function sendResponse(res, statusCode, data) {
 }
 
 
-// Router
-function handleRequest(req, res) {
+// ==========================================================
+// ENDPOINTS
+// ==========================================================
+
+// GET /orders
+function getOrders(req, res) {
+
+    // Parse the request URL
+    const url = new URL(req.url, "http://localhost");
+
+    // Extract the status query parameter
+    const status = url.searchParams.get("status");
+
+    // Retrieve all orders
+    let orderList = getAllOrders();
+
+    // Validate the status if provided
+    if (status && !validateStatus(status)) {
+        return sendResponse(res, 400, {
+            message: "Invalid order status"
+        });
+    }
+
+    // Filter orders by status if a filter was provided
+    if (status) {
+        orderList = orderList.filter(order => order.status === status);
+    }
+
+    // Return the resulting order list
+    return sendResponse(res, 200, orderList);
+}
+
+
+// GET /orders/:id
+function getOrderById(req, res) {
+
+    // Parse the request URL
+    const url = new URL(req.url, "http://localhost");
+
+    // Extract the ID from the URL path and convert it to a number
+    const id = Number(url.pathname.split("/")[2]);
+
+    // Validate the ID
+    if (!Number.isInteger(id) || id <= 0) {
+        return sendResponse(res, 404, {
+            message: "Invalid order ID"
+        });
+    }
+
+    // Find the order with the requested ID
+    const order = orders.find(order => order.id === id);
+
+    // Return 404 if the order doesn't exist
+    if (!order) {
+        return sendResponse(res, 404, {
+            message: "Order not found"
+        });
+    }
+
+    // Return the requested order
+    return sendResponse(res, 200, order.getAllOrders());
+}
+
+
+// POST /orders
+function createOrder(req, res) {
+
+    let body = "";
+
+    // Collect request body chunks
+    req.on("data", chunk => body += chunk);
+
+    req.on("end", () => {
+
+        // Parse JSON
+        let data;
+
+        try {
+            data = JSON.parse(body);
+        } catch {
+            return sendResponse(res, 400, {
+                message: "Invalid JSON body"
+            });
+        }
+
+        // Validate order data
+        const validation = validateOrder(data);
+
+        if (!validation.valid) {
+            return sendResponse(res, 400, {
+                message: validation.message
+            });
+        }
+
+        // Create and store order
+        const order = new Order(
+            nextOrderId++, 
+            data.client.trim(), 
+            data.item.trim()
+        );
+
+        orders.push(order);
+
+        return sendResponse(res, 201, order.getAllOrders());
+    });
+
+    req.on("error", () => {
+        return sendResponse(res, 400, {
+            message: "Error receiving request body"
+        });
+    });
+}
+
+
+//  PATCH /orders/:id/status
+function updateOrderStatus(req, res) {
 
     const url = new URL(req.url, "http://localhost");
 
+    // Extract order ID
+    const id = Number(url.pathname.split("/")[2]);
+
+    // Find order
+    const order = orders.find(order => order.id === id);
+
+    if (!order) {
+        return sendResponse(res, 404, {
+            message: "Order not found"
+        });
+    }
+
+    let body = "";
+
+    // Collect request body
+    req.on("data", chunk => body += chunk);
+
+    req.on("end", () => {
+
+        // Parse JSON
+        let data;
+
+        try {
+            data = JSON.parse(body);
+        } catch {
+            return sendResponse(res, 400, {
+                message: "Invalid JSON body"
+            });
+        }
+
+        if (
+            !data ||
+            typeof data !== "object" ||
+            Array.isArray(data) ||
+            Object.keys(data).length !== 1 ||
+            !validateStatus(data.status)
+        ) {
+            return sendResponse(res, 400, {
+                message: "Invalid order status"
+            });
+        }
+
+        // Update order status
+        order.status = data.status;
+
+        return sendResponse(res, 200, order.getAllOrders());
+    });
+
+    req.on("error", () => {
+        return sendResponse(res, 400, {
+            message: "Error receiving request body"
+        });
+    });
+}
+
+
+// DELETE /orders/:id
+function deleteOrder(req, res) {
+
+    const url = new URL(req.url, "http://localhost");
+
+    // Extract order ID
+    const id = Number(url.pathname.split("/")[2]);
+
+    // Find order index
+    const orderIndex = orders.findIndex(order => order.id === id);
+
+    // Check if order exists
+    if (orderIndex === -1) {
+        return sendResponse(res, 404, {
+            message: "Order not found"
+        });
+    }
+
+    // Remove order from array
+    orders.splice(orderIndex, 1);
+
+    // Return 204 No Content
+    return sendResponse(res, 204);
+}
+
+
+// Router
+function handleRequest(req, res) {
+    const url = new URL(req.url, "http://localhost");
     const pathname = url.pathname;
 
     // GET /orders
     if (req.method === "GET" && pathname === "/orders") {
-
-        // Getting all the items data
-        const orderList = orders.map(order =>
-            order.getInformation()
-        );
-
-        // Status code
-        return sendResponse(res, 200, orderList);
+        return getOrders(req, res);
     }
 
-    // GET /orders/id
-    if (req.method === "GET" && pathname.startsWith("/orders/")) {
+    // POST /orders
+    if (req.method === "POST" && pathname === "/orders") {
+        return createOrder(req, res);
+    }
 
-        const id = Number(pathname.split("/")[2]);
+    // GET /orders/:id
+    if (req.method === "GET" && /^\/orders\/\d+$/.test(pathname)) {
+        return getOrderById(req, res);
+    }
 
-        if (!Number.isInteger(id) || id <= 0) {
-            return sendResponse(res, 400, {
-                message: "Invalid order ID"
-            });
-        }
+    // PATCH /orders/:id/status
+    if (req.method === "PATCH" && /^\/orders\/\d+\/status$/.test(pathname)) {
+        return updateOrderStatus(req, res);
+    }
 
-        const order = orders.find(order => order.id === id);
-
-        if (!order) {
-            return sendResponse(res, 404, {
-                message: "Order not found"
-            });
-        }
-
-        return sendResponse(res, 200, order.getInformation());
+    // DELETE /orders/:id
+    if (req.method === "DELETE" && /^\/orders\/\d+$/.test(pathname)) {
+        return deleteOrder(req, res);
     }
 
     // Unknown route
@@ -221,54 +350,3 @@ const server = http.createServer(handleRequest);
 server.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
 });
-
-
-// ==========================================================
-// ENDPOINTS
-// ==========================================================
-
-function getOrders(req, res) {
-
-    const url = new URL(req.url, "http://localhost");
-
-    const status = url.searchParams.get("status");
-
-    let orderList = getAllInformations();
-
-    if (status && !validateStatus(status)) {
-        return sendResponse(res, 400, {
-            message: "Invalid order status"
-        });
-    }
-
-    if (status) {
-        orderList = orderList.filter(order => order.status === status);
-    }
-
-    return sendResponse(res, 200, orderList);
-}
-
-
-function getOrderById(req, res) {
-
-    const url = new URL(req.url, "http://localhost");
-
-    const id = Number(url.pathname.split("/")[2]);
-
-    if (!Number.isInteger(id) || id <= 0) {
-        return sendResponse(res, 400, {
-            message: "Invalid order ID"
-        });
-    }
-
-    const order = orders.find(order => order.id === id);
-
-    if (!order) {
-        return sendResponse(res, 404, {
-            message: "Order not found"
-        });
-    }
-
-    return sendResponse(res, 200, order.getInformation());
-}
-
